@@ -1,24 +1,18 @@
 import { NextRequest, NextResponse } from "next/server";
 import webpush from "web-push";
-
-// In-memory subscription store for demo purposes
-const subscriptions = new Set<string>();
+import { ConvexHttpClient } from "convex/browser";
+import { api } from "@/convex/_generated/api";
 
 export const runtime = "nodejs";
 
-let ephemeralKeys: { publicKey: string; privateKey: string } | null = null;
-
 function getVapid() {
-  let publicKey = process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY;
-  let privateKey = process.env.VAPID_PRIVATE_KEY;
+  const publicKey = process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY;
+  const privateKey = process.env.VAPID_PRIVATE_KEY;
   const subject = process.env.VAPID_SUBJECT || "mailto:example@example.com";
   if (!publicKey || !privateKey) {
-    // Generate ephemeral keys for local/dev usage
-    if (!ephemeralKeys) {
-      ephemeralKeys = webpush.generateVAPIDKeys();
-    }
-    publicKey = ephemeralKeys.publicKey;
-    privateKey = ephemeralKeys.privateKey;
+    throw new Error(
+      "VAPID keys are missing. Set NEXT_PUBLIC_VAPID_PUBLIC_KEY and VAPID_PRIVATE_KEY in your environment."
+    );
   }
   return { publicKey, privateKey, subject };
 }
@@ -39,26 +33,54 @@ export async function POST(req: NextRequest) {
     if (action === "subscribe") {
       const subscription = body.subscription;
       if (!subscription) return NextResponse.json({ error: "Missing subscription" }, { status: 400 });
-      subscriptions.add(JSON.stringify(subscription));
-      return NextResponse.json({ ok: true });
+      const url = process.env.NEXT_PUBLIC_CONVEX_URL;
+      if (!url) {
+        return NextResponse.json({ error: "Convex URL not configured. Run `npx convex dev --once` locally or set NEXT_PUBLIC_CONVEX_URL in production." }, { status: 500 });
+      }
+      try {
+        const convex = new ConvexHttpClient(url);
+        const { endpoint, keys } = subscription;
+        await convex.mutation(api.subscriptions.upsert, {
+          endpoint,
+          keys: { p256dh: keys.p256dh, auth: keys.auth },
+        });
+        return NextResponse.json({ ok: true });
+      } catch (e: any) {
+        return NextResponse.json({ error: `Convex upsert failed: ${e?.message || String(e)}` }, { status: 500 });
+      }
     }
     if (action === "sendTest") {
       const payload = body.payload || { title: "Hello", body: "Push from server" };
       const { publicKey, privateKey, subject } = getVapid();
       webpush.setVapidDetails(subject, publicKey, privateKey);
-      const sendAll = Array.from(subscriptions).map(async (subStr) => {
+      const url = process.env.NEXT_PUBLIC_CONVEX_URL;
+      if (!url) {
+        return NextResponse.json({ error: "Convex URL not configured. Run `npx convex dev --once` locally or set NEXT_PUBLIC_CONVEX_URL in production." }, { status: 500 });
+      }
+      let all: Array<{ endpoint: string; keys: { p256dh: string; auth: string } }>; 
+      try {
+        const convex = new ConvexHttpClient(url);
+        all = await convex.query(api.subscriptions.list, {});
+      } catch (e: any) {
+        return NextResponse.json({ error: `Convex list failed: ${e?.message || String(e)}` }, { status: 500 });
+      }
+      const sendAll = all.map(async (s) => {
         try {
-          const sub = JSON.parse(subStr);
-          await webpush.sendNotification(sub, JSON.stringify(payload));
+          await webpush.sendNotification(
+            { endpoint: s.endpoint, keys: { p256dh: s.keys.p256dh, auth: s.keys.auth } },
+            JSON.stringify(payload)
+          );
         } catch (err: any) {
-          // Remove bad subscriptions
           if (err?.statusCode === 410 || err?.statusCode === 404) {
-            subscriptions.delete(subStr);
+            try {
+              const convex = new ConvexHttpClient(url);
+              await convex.mutation(api.subscriptions.remove, { endpoint: s.endpoint });
+            } catch {}
           }
         }
       });
       await Promise.allSettled(sendAll);
-      return NextResponse.json({ sent: subscriptions.size });
+      return NextResponse.json({ sent: all.length });
     }
     return NextResponse.json({ error: "Unknown action" }, { status: 400 });
   } catch (error: any) {

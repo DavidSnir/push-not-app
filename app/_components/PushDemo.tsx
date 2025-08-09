@@ -1,6 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { Button } from "@/components/ui/button";
+import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 
 async function urlBase64ToUint8Array(base64String: string) {
   const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
@@ -35,6 +37,18 @@ export default function PushDemo() {
     const res = await fetch("/api/push");
     const { publicKey, error } = await res.json();
     if (error) throw new Error(error);
+
+    // If an existing subscription has a different appServerKey, unsubscribe first
+    const existing = await reg.pushManager.getSubscription();
+    if (existing) {
+      // Try to resubscribe with the same key; if it fails due to key mismatch, unsubscribe
+      try {
+        await existing.unsubscribe();
+      } catch (_) {
+        // ignore
+      }
+    }
+
     const sub = await reg.pushManager.subscribe({
       userVisibleOnly: true,
       applicationServerKey: await urlBase64ToUint8Array(publicKey),
@@ -48,30 +62,41 @@ export default function PushDemo() {
   };
 
   const sendTest = async () => {
-    await fetch("/api/push", {
+    const res = await fetch("/api/push", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ action: "sendTest", payload: { title: "PushNot", body: "It works!", data: { url: "/" } } }),
     });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      alert(`Error: ${data?.error || res.statusText}`);
+    }
   };
 
   return (
-    <div className="flex flex-col gap-3 p-4 border rounded max-w-md">
-      <div className="text-sm">Support: {String(supported)}</div>
-      <div className="text-sm">Permission: {permission}</div>
-      <button className="px-3 py-2 rounded bg-black text-white disabled:opacity-40" disabled={!supported || permission !== "granted"} onClick={subscribe}>
-        Subscribe
-      </button>
-      <button className="px-3 py-2 rounded border" onClick={sendTest} disabled={!endpoint}>
-        Send test notification
-      </button>
-      {endpoint && <div className="break-all text-xs opacity-70">{endpoint}</div>}
-      {permission !== "granted" && supported && (
-        <button className="px-3 py-2 rounded border" onClick={() => Notification.requestPermission().then(setPermission)}>
-          Ask permission
-        </button>
-      )}
-    </div>
+    <Card className="max-w-xl w-full">
+      <CardHeader>
+        <CardTitle>Web Push</CardTitle>
+      </CardHeader>
+      <CardContent className="flex flex-col gap-3">
+        <div className="text-sm">Support: {String(supported)}</div>
+        <div className="text-sm">Permission: {permission}</div>
+        <div className="flex gap-2">
+          <Button disabled={!supported || permission !== "granted"} onClick={subscribe}>
+            Subscribe
+          </Button>
+          <Button variant="outline" onClick={sendTest} disabled={!endpoint}>
+            Send test notification
+          </Button>
+          {permission !== "granted" && supported && (
+            <Button variant="ghost" onClick={() => Notification.requestPermission().then(setPermission)}>
+              Ask permission
+            </Button>
+          )}
+        </div>
+        {endpoint && <div className="break-all text-xs opacity-70">{endpoint}</div>}
+      </CardContent>
+    </Card>
   );
 }
 
