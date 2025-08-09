@@ -1,7 +1,9 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  /* config options here */
+  experimental: {
+    // Ensure headers allow service worker scope on root when deployed behind some hosts
+  },
 };
 
 export default nextConfig;
