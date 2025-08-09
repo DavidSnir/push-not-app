@@ -44,7 +44,7 @@ export default function PushDemo() {
       // Try to resubscribe with the same key; if it fails due to key mismatch, unsubscribe
       try {
         await existing.unsubscribe();
-      } catch (_) {
+      } catch {
         // ignore
       }
     }

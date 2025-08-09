@@ -5,6 +5,23 @@ import { api } from "@/convex/_generated/api";
 
 export const runtime = "nodejs";
 
+function getErrorMessage(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  try {
+    return JSON.stringify(error);
+  } catch {
+    return String(error);
+  }
+}
+
+function isGoneOrNotFound(error: unknown): boolean {
+  if (typeof error === "object" && error !== null && "statusCode" in error) {
+    const code = (error as { statusCode?: number }).statusCode;
+    return code === 410 || code === 404;
+  }
+  return false;
+}
+
 function getVapid() {
   const publicKey = process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY;
   const privateKey = process.env.VAPID_PRIVATE_KEY;
@@ -21,8 +38,8 @@ export async function GET() {
   try {
     const { publicKey } = getVapid();
     return NextResponse.json({ publicKey });
-  } catch (error: any) {
-    return NextResponse.json({ error: error.message }, { status: 500 });
+  } catch (error) {
+    return NextResponse.json({ error: getErrorMessage(error) }, { status: 500 });
   }
 }
 
@@ -45,8 +62,8 @@ export async function POST(req: NextRequest) {
           keys: { p256dh: keys.p256dh, auth: keys.auth },
         });
         return NextResponse.json({ ok: true });
-      } catch (e: any) {
-        return NextResponse.json({ error: `Convex upsert failed: ${e?.message || String(e)}` }, { status: 500 });
+      } catch (e) {
+        return NextResponse.json({ error: `Convex upsert failed: ${getErrorMessage(e)}` }, { status: 500 });
       }
     }
     if (action === "sendTest") {
@@ -61,8 +78,8 @@ export async function POST(req: NextRequest) {
       try {
         const convex = new ConvexHttpClient(url);
         all = await convex.query(api.subscriptions.list, {});
-      } catch (e: any) {
-        return NextResponse.json({ error: `Convex list failed: ${e?.message || String(e)}` }, { status: 500 });
+      } catch (e) {
+        return NextResponse.json({ error: `Convex list failed: ${getErrorMessage(e)}` }, { status: 500 });
       }
       const sendAll = all.map(async (s) => {
         try {
@@ -70,8 +87,8 @@ export async function POST(req: NextRequest) {
             { endpoint: s.endpoint, keys: { p256dh: s.keys.p256dh, auth: s.keys.auth } },
             JSON.stringify(payload)
           );
-        } catch (err: any) {
-          if (err?.statusCode === 410 || err?.statusCode === 404) {
+        } catch (err) {
+          if (isGoneOrNotFound(err)) {
             try {
               const convex = new ConvexHttpClient(url);
               await convex.mutation(api.subscriptions.remove, { endpoint: s.endpoint });
@@ -83,8 +100,8 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ sent: all.length });
     }
     return NextResponse.json({ error: "Unknown action" }, { status: 400 });
-  } catch (error: any) {
-    return NextResponse.json({ error: error.message }, { status: 500 });
+  } catch (error) {
+    return NextResponse.json({ error: getErrorMessage(error) }, { status: 500 });
   }
 }
 
